@@ -26,17 +26,21 @@
     user-select: none;
   }
   #app {
-    height: 100vh;
+    position: fixed;
+    left: 50%; top: 50%;
+    width: 300px; height: 300px;
+    transform: translate(-50%, -50%) scale(var(--s, 1));
+    transform-origin: center;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3vmin;
-    padding: 3vmin;
+    gap: 9px;
+    padding: 9px;
   }
   .dial {
     position: relative;
-    width: min(78vmin, 100%);
+    width: 234px;
     aspect-ratio: 1;
     flex: 0 1 auto;
     min-height: 0;
@@ -56,7 +60,7 @@
     align-items: center; justify-content: center;
   }
   .time {
-    font-size: 17vmin;
+    font-size: 51px;
     font-weight: 600;
     font-variant-numeric: tabular-nums;
     letter-spacing: -0.02em;
@@ -64,8 +68,8 @@
     transition: color 0.4s;
   }
   .label {
-    margin-top: 1.5vmin;
-    font-size: 5vmin;
+    margin-top: 4.5px;
+    font-size: 15px;
     color: var(--muted);
     min-height: 1.2em;
   }
@@ -80,20 +84,20 @@
   .controls {
     display: flex; flex-wrap: wrap;
     justify-content: center;
-    gap: 1.6vmin;
+    gap: 4.8px;
     transition: opacity 0.3s;
   }
   body.running .controls { opacity: 0.18; }
   body.running:hover .controls, body.running .controls:focus-within { opacity: 1; }
   button {
     font: inherit;
-    font-size: 4.6vmin;
+    font-size: 13.8px;
     font-weight: 600;
     color: var(--fg);
     background: var(--btn);
     border: none;
     border-radius: 999px;
-    padding: 1.6vmin 3.6vmin;
+    padding: 4.8px 10.8px;
     cursor: pointer;
     white-space: nowrap;
   }
@@ -325,12 +329,15 @@
   } else {
     pipBtn.addEventListener("click", async () => {
       const app = $("app");
-      const pip = await documentPictureInPicture.requestWindow({ width: 280, height: 320 });
+      const pip = await documentPictureInPicture.requestWindow({ width: 300, height: 300 });
+      pip.document.documentElement.lang = "ja";
       document.querySelectorAll("style").forEach((s) => pip.document.head.appendChild(s.cloneNode(true)));
       pip.document.title = "ワークタイマー";
       pip.document.body.className = document.body.className;
       pip.document.body.classList.add("in-pip");
       pip.document.body.appendChild(app);
+      fit();
+      pip.addEventListener("resize", fit);
 
       // 状態クラスを小窓側にも反映
       const mo = new MutationObserver(() => {
@@ -349,12 +356,23 @@
         mo.disconnect();
         document.body.insertBefore(app, holder);
         holder.remove();
+        fit();
         pipBtn.hidden = false;
       });
     });
   }
 
+  // ---------- 縮尺（全体表示も小窓も同じデザインを拡大縮小するだけ） ----------
+  const app = $("app");
+  function fit() {
+    const w = app.ownerDocument.defaultView;
+    const scale = Math.min(w.innerWidth, w.innerHeight) / 300;
+    app.style.setProperty("--s", scale);
+  }
+  window.addEventListener("resize", fit);
+
   render();
+  fit();
 })();
 </script>
 </body>
