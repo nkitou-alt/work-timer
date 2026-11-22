@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ワークタイマー</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #8a9099;
+    --track: #e8eaed;
+    --ok: #2f9e6e;
+    --warn: #e0a100;
+    --over: #d6455d;
+    --btn: #f2f3f5;
+    --btn-hover: #e4e6e9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Helvetica Neue", Arial, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+  #app {
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3vmin;
+    padding: 3vmin;
+  }
+  .dial {
+    position: relative;
+    width: min(78vmin, 100%);
+    aspect-ratio: 1;
+    flex: 0 1 auto;
+    min-height: 0;
+  }
+  .dial svg { width: 100%; height: 100%; transform: rotate(-90deg) scaleY(-1); }
+  .track { fill: none; stroke: var(--track); stroke-width: 7; }
+  .ring {
+    fill: none;
+    stroke: var(--ok);
+    stroke-width: 7;
+    stroke-linecap: round;
+    transition: stroke 0.4s;
+  }
+  .center {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+  }
+  .time {
+    font-size: 17vmin;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    transition: color 0.4s;
+  }
+  .label {
+    margin-top: 1.5vmin;
+    font-size: 5vmin;
+    color: var(--muted);
+    min-height: 1.2em;
+  }
+  body.warn .ring { stroke: var(--warn); }
+  body.warn .time { color: var(--warn); }
+  body.over .ring { stroke: var(--over); }
+  body.over .time, body.over .label { color: var(--over); }
+  body.over .label { font-weight: 600; }
+  body.over .dial { animation: pulse 2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: 0.55; } }
+
+  .controls {
+    display: flex; flex-wrap: wrap;
+    justify-content: center;
+    gap: 1.6vmin;
+    transition: opacity 0.3s;
+  }
+  body.running .controls { opacity: 0.18; }
+  body.running:hover .controls, body.running .controls:focus-within { opacity: 1; }
+  button {
+    font: inherit;
+    font-size: 4.6vmin;
+    font-weight: 600;
+    color: var(--fg);
+    background: var(--btn);
+    border: none;
+    border-radius: 999px;
+    padding: 1.6vmin 3.6vmin;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button:hover { background: var(--btn-hover); }
+  button.primary { background: var(--fg); color: #fff; }
+  button.primary:hover { background: #3a4048; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  [hidden] { display: none !important; }
+
+  .corner {
+    position: fixed; top: 2vmin; right: 2vmin;
+    font-size: 3.6vmin; padding: 1.2vmin 2.4vmin;
+    background: transparent; color: var(--muted);
+  }
+  .corner:hover { background: var(--btn); color: var(--fg); }
+  body.running .corner { opacity: 0.18; }
+  body.running:hover .corner { opacity: 1; }
+  body.in-pip .corner { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="dial">
+    <svg viewBox="0 0 100 100" aria-hidden="true">
+      <circle class="track" cx="50" cy="50" r="45"></circle>
+      <circle class="ring" id="ring" cx="50" cy="50" r="45"></circle>
+    </svg>
+    <div class="center">
+      <div class="time" id="time">0:00</div>
+      <div class="label" id="label"></div>
+    </div>
+  </div>
+
+  <!-- 設定中 -->
+  <div class="controls" id="setControls">
+    <button data-add="10">＋10分</button>
+    <button data-add="1">＋1分</button>
+    <button data-add="-1">−1分</button>
+    <button class="primary" id="startBtn">スタート</button>
+  </div>
+
+  <!-- 実行中・一時停止中・超過中 -->
+  <div class="controls" id="runControls" hidden>
+    <button data-extend="1">＋1分</button>
+    <button data-extend="5">＋5分</button>
+    <button class="primary" id="pauseBtn">一時停止</button>
+    <button id="resetBtn">リセット</button>
+  </div>
+</div>
+
+<button class="corner" id="pipBtn" title="スライドの上に小窓で常に表示します（Chrome / Edge）">小窓で表示</button>
+
+<script>
+(() => {
+  const CIRC = 2 * Math.PI * 45;
+  const WARN_SEC = 60;
+
+  const $ = (id) => document.getElementById(id);
+  const ring = $("ring"), timeEl = $("time"), labelEl = $("label");
+  ring.style.strokeDasharray = CIRC;
+
+  // state: "set" | "running" | "paused"
+  let state = "set";
+  let setMin = 10;          // 設定時間（分）
+  let totalMs = 0;          // 円の基準になる全体時間（延長分を含む）
+  let endAt = 0;            // 終了予定時刻（ms）
+  let pausedRemain = 0;     // 一時停止中の残り（ms）
+  let warned = false, ended = false;
+  let timerId = null, wakeLock = null;
+
+  // ---------- 音 ----------
+  let audioCtx = null;
+  const ctx = () => {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  };
+  function tone(freq, start, dur, vol) {
+    const c = ctx(), t = c.currentTime + start;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = "sine";
+    o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(c.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  const playWarn = () => { tone(880, 0, 0.6, 0.18); };
+  const playEnd = () => {
+    // チャイム（ド・ミ・ソ・ド）を2回
+    [0, 1.6].forEach((o) => {
+      tone(523.25, o + 0.0, 1.2, 0.3);
+      tone(659.25, o + 0.3, 1.2, 0.3);
+      tone(783.99, o + 0.6, 1.2, 0.3);
+      tone(1046.5, o + 0.9, 1.6, 0.3);
+    });
+  };
+
+  // ---------- 表示 ----------
+  const fmt = (sec) => {
+    sec = Math.max(0, Math.floor(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor(sec / 60) % 60, s = sec % 60;
+    const ss = String(s).padStart(2, "0");
+    return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+  };
+
+  function remainingMs() {
+    if (state === "running") return endAt - Date.now();
+    if (state === "paused") return pausedRemain;
+    return setMin * 60000;
+  }
+
+  function render() {
+    const rem = remainingMs();
+    const over = state !== "set" && rem <= 0;
+    let frac;
+
+    if (state === "set") {
+      timeEl.textContent = fmt(setMin * 60);
+      labelEl.textContent = "";
+      frac = setMin > 0 ? 1 : 0;
+    } else if (over) {
+      timeEl.textContent = "+" + fmt(-rem / 1000);
+      labelEl.textContent = "オーバー";
+      frac = 1;
+    } else {
+      timeEl.textContent = fmt(Math.ceil(rem / 1000));
+      labelEl.textContent = state === "paused" ? "一時停止中" : "";
+      frac = Math.max(0, Math.min(1, rem / totalMs));
+    }
+    ring.style.strokeDashoffset = CIRC * (1 - frac);
+    ring.style.opacity = frac > 0.001 ? 1 : 0;
+
+    document.body.classList.toggle("over", over);
+    document.body.classList.toggle("warn", !over && state !== "set" && rem <= WARN_SEC * 1000);
+    document.body.classList.toggle("running", state === "running");
+
+    $("setControls").hidden = state !== "set";
+    $("runControls").hidden = state === "set";
+    $("startBtn").disabled = setMin <= 0;
+    $("pauseBtn").textContent = state === "paused" ? "再開" : "一時停止";
+    document.title = state === "set" ? "ワークタイマー" : `${timeEl.textContent} ワークタイマー`;
+  }
+
+  function tick() {
+    const rem = remainingMs();
+    if (!warned && rem <= WARN_SEC * 1000 && rem > 0 && totalMs > WARN_SEC * 1000) {
+      warned = true; playWarn();
+    }
+    if (!ended && rem <= 0) { ended = true; playEnd(); }
+    render();
+  }
+
+  // ---------- 操作 ----------
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+  function releaseAwake() { if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; } }
+
+  function start() {
+    if (setMin <= 0) return;
+    ctx();
+    totalMs = setMin * 60000;
+    endAt = Date.now() + totalMs;
+    warned = false; ended = false;
+    state = "running";
+    timerId = setInterval(tick, 200);
+    keepAwake();
+    render();
+  }
+
+  function togglePause() {
+    if (state === "running") {
+      pausedRemain = endAt - Date.now();
+      state = "paused";
+      releaseAwake();
+    } else if (state === "paused") {
+      endAt = Date.now() + pausedRemain;
+      state = "running";
+      keepAwake();
+    }
+    render();
+  }
+
+  function extend(min) {
+    const add = min * 60000;
+    const rem = remainingMs();
+    if (rem <= 0) {
+      // 超過中に延長 → 「今からあと◯分」として仕切り直す
+      totalMs = add;
+      if (state === "running") endAt = Date.now() + add; else pausedRemain = add;
+      ended = false;
+    } else {
+      totalMs += add;
+      if (state === "running") endAt += add; else pausedRemain += add;
+    }
+    if (remainingMs() > WARN_SEC * 1000) warned = false;
+    render();
+  }
+
+  function reset() {
+    clearInterval(timerId); timerId = null;
+    state = "set";
+    releaseAwake();
+    render();
+  }
+
+  document.querySelectorAll("[data-add]").forEach((b) =>
+    b.addEventListener("click", () => {
+      setMin = Math.max(0, Math.min(180, setMin + Number(b.dataset.add)));
+      render();
+    }));
+  document.querySelectorAll("[data-extend]").forEach((b) =>
+    b.addEventListener("click", () => extend(Number(b.dataset.extend))));
+  $("startBtn").addEventListener("click", start);
+  $("pauseBtn").addEventListener("click", togglePause);
+  $("resetBtn").addEventListener("click", reset);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state === "running") keepAwake();
+  });
+
+  // ---------- 小窓（Document Picture-in-Picture：常に最前面） ----------
+  const pipBtn = $("pipBtn");
+  if (!("documentPictureInPicture" in window)) {
+    pipBtn.title = "このブラウザは小窓表示に未対応です。ウィンドウを小さくしてお使いください（Chrome / Edge 推奨）";
+    pipBtn.addEventListener("click", () => alert(pipBtn.title));
+  } else {
+    pipBtn.addEventListener("click", async () => {
+      const app = $("app");
+      const pip = await documentPictureInPicture.requestWindow({ width: 280, height: 320 });
+      document.querySelectorAll("style").forEach((s) => pip.document.head.appendChild(s.cloneNode(true)));
+      pip.document.title = "ワークタイマー";
+      pip.document.body.className = document.body.className;
+      pip.document.body.classList.add("in-pip");
+      pip.document.body.appendChild(app);
+
+      // 状態クラスを小窓側にも反映
+      const mo = new MutationObserver(() => {
+        pip.document.body.className = document.body.className + " in-pip";
+      });
+      mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+
+      const holder = document.createElement("p");
+      holder.id = "pipHolder";
+      holder.textContent = "小窓で表示中です。小窓を閉じるとここに戻ります。";
+      holder.style.cssText = "height:100vh;display:flex;align-items:center;justify-content:center;color:#8a9099;font-size:4vmin;";
+      document.body.insertBefore(holder, pipBtn);
+      pipBtn.hidden = true;
+
+      pip.addEventListener("pagehide", () => {
+        mo.disconnect();
+        document.body.insertBefore(app, holder);
+        holder.remove();
+        pipBtn.hidden = false;
+      });
+    });
+  }
+
+  render();
+})();
+</script>
+</body>
+</html>
