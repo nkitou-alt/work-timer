@@ -155,7 +155,10 @@
   const CIRC = 2 * Math.PI * 45;
   const WARN_SEC = 60;
 
-  const $ = (id) => document.getElementById(id);
+  // 要素は最初に一度だけ取得しておく（小窓に移動すると document から探せなくなるため）
+  const els = {};
+  document.querySelectorAll("[id]").forEach((el) => { els[el.id] = el; });
+  const $ = (id) => els[id];
   const ring = $("ring"), timeEl = $("time"), labelEl = $("label");
   ring.style.strokeDasharray = CIRC;
 
