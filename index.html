@@ -239,7 +239,7 @@
     $("setControls").hidden = state !== "set";
     $("runControls").hidden = state === "set";
     $("startBtn").disabled = setMin <= 0;
-    $("pauseBtn").textContent = state === "paused" ? "再開" : "一時停止";
+    $("pauseBtn").textContent = state === "paused" ? "再スタート" : "一時停止";
     document.title = state === "set" ? "ワークタイマー" : `${timeEl.textContent} ワークタイマー`;
   }
 
