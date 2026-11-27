@@ -330,7 +330,10 @@
     pipBtn.title = "このブラウザは小窓表示に未対応です。ウィンドウを小さくしてお使いください（Chrome / Edge 推奨）";
     pipBtn.addEventListener("click", () => alert(pipBtn.title));
   } else {
-    pipBtn.addEventListener("click", async () => {
+    pipBtn.addEventListener("click", () => openPip().catch((e) => {
+      alert("小窓を開けませんでした。\n" + (e && e.message ? e.message : e));
+    }));
+    async function openPip() {
       const app = $("app");
       const pip = await documentPictureInPicture.requestWindow({ width: 300, height: 300 });
       pip.document.documentElement.lang = "ja";
@@ -340,6 +343,8 @@
       pip.document.body.classList.add("in-pip");
       pip.document.body.appendChild(app);
       fit();
+      pip.requestAnimationFrame(fit);
+      setTimeout(fit, 300);
       pip.addEventListener("resize", fit);
 
       // 状態クラスを小窓側にも反映
@@ -362,15 +367,18 @@
         fit();
         pipBtn.hidden = false;
       });
-    });
+    }
   }
 
   // ---------- 縮尺（全体表示も小窓も同じデザインを拡大縮小するだけ） ----------
   const app = $("app");
   function fit() {
     const w = app.ownerDocument.defaultView;
-    const scale = Math.min(w.innerWidth, w.innerHeight) / 300;
-    app.style.setProperty("--s", scale);
+    const W = w.innerWidth || w.document.documentElement.clientWidth;
+    const H = w.innerHeight || w.document.documentElement.clientHeight;
+    // 小窓を開いた直後はサイズが0のことがあるので、描画されるまで待って計算し直す
+    if (!W || !H) { w.requestAnimationFrame(fit); return; }
+    app.style.setProperty("--s", Math.min(W, H) / 300);
   }
   window.addEventListener("resize", fit);
 
