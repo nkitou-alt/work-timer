@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ステップタイマー</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1f2328;
+    --muted: #8a9099;
+    --faint: #c3c7cd;
+    --track: #f0f1f3;
+    --upcoming: #dfe2e6;
+    --ok: #2f9e6e;
+    --active-bg: #eef7f2;
+    --btn: #f2f3f5;
+    --btn-hover: #e4e6e9;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "Helvetica Neue", Arial, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    overflow: hidden;
+    user-select: none;
+  }
+
+  /* 固定サイズ(480×360)のデザインを窓に合わせて拡大縮小する */
+  #app {
+    position: fixed;
+    left: 50%; top: 50%;
+    width: 480px; height: 360px;
+    transform: translate(-50%, -50%) scale(var(--s, 1));
+    display: flex; flex-direction: column;
+    padding: 14px 20px;
+    gap: 8px;
+  }
+
+  .steps { display: flex; flex-direction: column; gap: 5px; flex: 1; justify-content: center; }
+  .step {
+    display: grid;
+    grid-template-columns: 1fr 56px;
+    grid-template-rows: auto 10px;
+    column-gap: 10px;
+    row-gap: 4px;
+    padding: 5px 10px 7px;
+    border-radius: 10px;
+    transition: none;
+  }
+  .name { font-size: 15px; font-weight: 600; line-height: 1.25; align-self: end; }
+  .name small { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 6px; }
+  .left {
+    grid-row: 1 / span 2; grid-column: 2;
+    align-self: center; justify-self: end;
+    font-size: 16px; font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--muted);
+  }
+  .box {
+    grid-column: 1;
+    height: 10px;
+    border-radius: 4px;
+    background: var(--track);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%; width: 100%;
+    background: var(--upcoming);
+    border-radius: 4px;
+  }
+
+  .step.active { background: var(--active-bg); }
+  .step.active .fill { background: var(--ok); }
+  .step.active .left { color: var(--ok); font-size: 19px; }
+  .step.done .name, .step.done .left { color: var(--faint); }
+  .step.done .name small { color: var(--faint); }
+
+  .footer {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 8px;
+    transition: opacity 0.3s;
+  }
+  .total { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .total b { color: var(--fg); font-weight: 600; }
+  body.done .total b { color: var(--ok); }
+  .controls { display: flex; gap: 6px; }
+  body.running .footer { opacity: 0.25; }
+  body.running:hover .footer, body.running .footer:focus-within { opacity: 1; }
+
+  button {
+    font: inherit;
+    font-size: 13px; font-weight: 600;
+    color: var(--fg);
+    background: var(--btn);
+    border: none; border-radius: 999px;
+    padding: 6px 13px;
+    cursor: pointer; white-space: nowrap;
+  }
+  button:hover { background: var(--btn-hover); }
+  button.primary { background: var(--fg); color: #fff; }
+  button.primary:hover { background: #3a4048; }
+  button:disabled { opacity: 0.35; cursor: default; }
+  [hidden] { display: none !important; }
+
+  .corner {
+    position: fixed; top: 2vmin; right: 2vmin;
+    font-size: 3vmin; padding: 1vmin 2vmin;
+    background: transparent; color: var(--muted);
+  }
+  .corner:hover { background: var(--btn); color: var(--fg); }
+  body.running .corner { opacity: 0.18; }
+  body.running:hover .corner { opacity: 1; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="steps" id="steps"></div>
+  <div class="footer">
+    <div class="total" id="total"></div>
+    <div class="controls">
+      <button id="skipBtn" title="今のステップを終えて次へ進みます">次へ</button>
+      <button id="resetBtn">リセット</button>
+      <button class="primary" id="mainBtn">スタート</button>
+    </div>
+  </div>
+</div>
+
+<button class="corner" id="pipBtn" title="スライドの上に小窓で常に表示します（Chrome / Edge）">小窓で表示</button>
+
+<script>
+(() => {
+  // ===== ステップの設定（ここを書き換えると別の研修にも使えます。単位は秒） =====
+  const STEPS = [
+    { name: "本人から話す",           sec: 5 * 60 },
+    { name: "質問する・理解を深める", sec: 12 * 60 },
+    { name: "考える",                 sec: 30 },
+    { name: "感じたことを返す",       sec: 2 * 60 },
+    { name: "本人から一言",           sec: 30 },
+  ];
+  // ===========================================================================
+
+  const fmt = (sec) => {
+    sec = Math.max(0, Math.ceil(sec));
+    return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+  };
+  const durLabel = (sec) => sec % 60 === 0 ? `${sec / 60}分` : sec < 60 ? `${sec}秒` : `${Math.floor(sec / 60)}分${sec % 60}秒`;
+
+  // 行を生成
+  const stepsEl = document.getElementById("steps");
+  const rows = STEPS.map((s) => {
+    const row = document.createElement("div");
+    row.className = "step";
+    row.innerHTML = `<div class="name"></div><div class="left"></div><div class="box"><div class="fill"></div></div>`;
+    row.querySelector(".name").innerHTML = `${s.name}<small>${durLabel(s.sec)}</small>`;
+    stepsEl.appendChild(row);
+    return { row, left: row.querySelector(".left"), fill: row.querySelector(".fill") };
+  });
+
+  // 要素は最初に一度だけ取得（小窓へ移動しても参照できるように）
+  const els = {};
+  document.querySelectorAll("[id]").forEach((el) => { els[el.id] = el; });
+  const $ = (id) => els[id];
+
+  // state: "idle" | "running" | "paused" | "done"
+  let state = "idle";
+  let idx = 0;              // 現在のステップ
+  let stepEndAt = 0;        // 現在のステップの終了時刻
+  let pausedRemain = 0;
+  let timerId = null, wakeLock = null;
+
+  // ---------- 音 ----------
+  let audioCtx = null;
+  const ctx = () => {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    return audioCtx;
+  };
+  function tone(freq, start, dur, vol) {
+    const c = ctx(), t = c.currentTime + start;
+    const o = c.createOscillator(), g = c.createGain();
+    o.type = "sine"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g).connect(c.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  }
+  // 区切り：短いチャイム（ミ・ド）
+  const playStep = () => { tone(659.25, 0, 0.9, 0.28); tone(523.25, 0.35, 1.2, 0.28); };
+  // 全体の終了：少し長いチャイム（ド・ミ・ソ・ド）
+  const playEnd = () => {
+    tone(523.25, 0.0, 1.2, 0.3); tone(659.25, 0.3, 1.2, 0.3);
+    tone(783.99, 0.6, 1.2, 0.3); tone(1046.5, 0.9, 1.8, 0.3);
+  };
+
+  // ---------- 表示 ----------
+  const remainMs = () => state === "running" ? stepEndAt - Date.now()
+                       : state === "paused" ? pausedRemain : 0;
+
+  function render() {
+    const rem = remainMs();
+    rows.forEach((r, i) => {
+      const s = STEPS[i];
+      const isDone = state === "done" || ((state === "running" || state === "paused") && i < idx);
+      const isActive = (state === "running" || state === "paused") && i === idx;
+      r.row.classList.toggle("done", isDone);
+      r.row.classList.toggle("active", isActive);
+      let frac = 1;
+      if (isDone) frac = 0;
+      else if (isActive) frac = Math.max(0, Math.min(1, rem / (s.sec * 1000)));
+      r.fill.style.width = (frac * 100) + "%";
+      r.left.textContent = isDone ? "✓" : isActive ? fmt(rem / 1000) : fmt(s.sec);
+    });
+
+    const totalSec = STEPS.reduce((a, s) => a + s.sec, 0);
+    let restSec = totalSec;
+    if (state === "running" || state === "paused") {
+      restSec = rem / 1000 + STEPS.slice(idx + 1).reduce((a, s) => a + s.sec, 0);
+    } else if (state === "done") restSec = 0;
+    $("total").innerHTML =
+      state === "done" ? `<b>終了しました</b>` :
+      state === "paused" ? `一時停止中　全体の残り <b>${fmt(restSec)}</b>` :
+      state === "running" ? `全体の残り <b>${fmt(restSec)}</b>` :
+      `全体 <b>${fmt(totalSec)}</b>`;
+
+    $("mainBtn").textContent = state === "running" ? "一時停止" : state === "paused" ? "再スタート" : "スタート";
+    $("skipBtn").hidden = !(state === "running" || state === "paused");
+    $("resetBtn").hidden = state === "idle";
+    document.body.classList.toggle("running", state === "running");
+    document.body.classList.toggle("done", state === "done");
+  }
+
+  // ---------- 進行 ----------
+  function advance(now) {
+    idx++;
+    if (idx >= STEPS.length) {
+      state = "done";
+      clearInterval(timerId); timerId = null;
+      releaseAwake();
+      playEnd();
+      return false;
+    }
+    stepEndAt = now + STEPS[idx].sec * 1000;
+    playStep();
+    return true;
+  }
+
+  function tick() {
+    if (state !== "running") return;
+    // バックグラウンドで遅れた場合も、終了時刻を基準に正しく追いつく
+    while (state === "running" && Date.now() >= stepEndAt) {
+      const carry = stepEndAt;
+      if (!advance(carry)) break;
+    }
+    render();
+  }
+
+  async function keepAwake() {
+    try { if ("wakeLock" in navigator && !wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch (e) {}
+  }
+  function releaseAwake() { if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; } }
+
+  function main() {
+    ctx();
+    if (state === "idle" || state === "done") {
+      idx = 0;
+      stepEndAt = Date.now() + STEPS[0].sec * 1000;
+      state = "running";
+    } else if (state === "running") {
+      pausedRemain = stepEndAt - Date.now();
+      state = "paused";
+      releaseAwake();
+      render();
+      return;
+    } else if (state === "paused") {
+      stepEndAt = Date.now() + pausedRemain;
+      state = "running";
+    }
+    if (!timerId) timerId = setInterval(tick, 100);
+    keepAwake();
+    render();
+  }
+
+  function skip() {
+    if (state === "paused") {
+      idx++;
+      if (idx >= STEPS.length) { state = "done"; clearInterval(timerId); timerId = null; playEnd(); }
+      else { pausedRemain = STEPS[idx].sec * 1000; playStep(); }
+    } else if (state === "running") {
+      advance(Date.now());
+    }
+    render();
+  }
+
+  function reset() {
+    clearInterval(timerId); timerId = null;
+    state = "idle"; idx = 0;
+    releaseAwake();
+    render();
+  }
+
+  $("mainBtn").addEventListener("click", main);
+  $("skipBtn").addEventListener("click", skip);
+  $("resetBtn").addEventListener("click", reset);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && state === "running") keepAwake();
+  });
+
+  // ---------- 縮尺 ----------
+  const app = $("app");
+  function fit() {
+    const w = app.ownerDocument.defaultView;
+    app.style.setProperty("--s", Math.min(w.innerWidth / 480, w.innerHeight / 360));
+  }
+  window.addEventListener("resize", fit);
+
+  // ---------- 小窓（常に最前面） ----------
+  const pipBtn = $("pipBtn");
+  if (!("documentPictureInPicture" in window)) {
+    pipBtn.title = "このブラウザは小窓表示に未対応です。ウィンドウを小さくしてお使いください（Chrome / Edge 推奨）";
+    pipBtn.addEventListener("click", () => alert(pipBtn.title));
+  } else {
+    pipBtn.addEventListener("click", async () => {
+      const pip = await documentPictureInPicture.requestWindow({ width: 400, height: 300 });
+      pip.document.documentElement.lang = "ja";
+      document.querySelectorAll("style").forEach((s) => pip.document.head.appendChild(s.cloneNode(true)));
+      pip.document.title = "ステップタイマー";
+      pip.document.body.className = document.body.className;
+      pip.document.body.appendChild(app);
+      fit();
+      pip.addEventListener("resize", fit);
+
+      const mo = new MutationObserver(() => { pip.document.body.className = document.body.className; });
+      mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
+
+      const holder = document.createElement("p");
+      holder.textContent = "小窓で表示中です。小窓を閉じるとここに戻ります。";
+      holder.style.cssText = "height:100vh;display:flex;align-items:center;justify-content:center;color:#8a9099;font-size:3vmin;";
+      document.body.insertBefore(holder, pipBtn);
+      pipBtn.hidden = true;
+
+      pip.addEventListener("pagehide", () => {
+        mo.disconnect();
+        document.body.insertBefore(app, holder);
+        holder.remove();
+        pipBtn.hidden = false;
+        fit();
+      });
+    });
+  }
+
+  render();
+  fit();
+})();
+</script>
+</body>
+</html>
